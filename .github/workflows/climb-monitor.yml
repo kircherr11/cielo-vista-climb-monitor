@@ -1,0 +1,60 @@
+name: climb-monitor
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'     # GitHub runs this "every 5 min" but often late
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'Send a test push'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: climb-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check calendar
+        id: chk
+        env:
+          TEST: ${{ inputs.test || 'false' }}
+        run: bash check.sh
+
+      - name: Already sent this alert?
+        if: steps.chk.outputs.sig != ''
+        id: seen
+        uses: actions/cache/restore@v4
+        with:
+          path: sent.txt
+          key: sent-${{ steps.chk.outputs.sig }}
+          lookup-only: true
+
+      - name: Send push
+        if: steps.chk.outputs.sig != '' && steps.seen.outputs.cache-hit != 'true'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TITLE: ${{ steps.chk.outputs.title }}
+          MSG: ${{ steps.chk.outputs.msg }}
+          PRIORITY: ${{ steps.chk.outputs.priority }}
+        run: |
+          curl -sS --fail -H "Title: $TITLE" -H "Priority: $PRIORITY" -H "Tags: cloud,mountain" \
+            -H "Click: https://www.cielo-vista-ranch.info/product/hiking/" \
+            -d "$MSG" "https://ntfy.sh/$NTFY_TOPIC" > /dev/null
+          echo "${{ steps.chk.outputs.sig }}" > sent.txt
+
+      - name: Remember it was sent
+        if: steps.chk.outputs.sig != '' && steps.seen.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sent.txt
+          key: sent-${{ steps.chk.outputs.sig }}
